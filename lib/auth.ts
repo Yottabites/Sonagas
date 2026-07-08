@@ -1,13 +1,19 @@
 import jwt from 'jsonwebtoken'
 import bcrypt from 'bcryptjs'
 
-const JWT_SECRET = process.env.JWT_SECRET as string
-
-if (!JWT_SECRET) {
-  throw new Error('JWT_SECRET não definido no .env')
-}
-
 const SALT_ROUNDS = 10
+
+// ------------------------------------------------------------
+// JWT_SECRET: lido e validado só quando é realmente necessário,
+// não no import do módulo (evita quebrar o `next build`)
+// ------------------------------------------------------------
+function obterJwtSecret(): string {
+  const secret = process.env.JWT_SECRET
+  if (!secret) {
+    throw new Error('JWT_SECRET não definido no .env')
+  }
+  return secret
+}
 
 // ------------------------------------------------------------
 // Senhas: hash e verificação (bcrypt)
@@ -40,11 +46,11 @@ export interface PayloadToken {
 }
 
 export function gerarToken(payload: PayloadToken): string {
-  return jwt.sign(payload, JWT_SECRET, { expiresIn: '8h' })
+  return jwt.sign(payload, obterJwtSecret(), { expiresIn: '8h' })
 }
 
 export function verificarToken(token: string): PayloadToken {
-  return jwt.verify(token, JWT_SECRET) as PayloadToken
+  return jwt.verify(token, obterJwtSecret()) as PayloadToken
 }
 
 // ------------------------------------------------------------
