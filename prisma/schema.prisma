@@ -1,0 +1,441 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "mysql"
+}
+
+enum PerfilUtilizador {
+  ADMIN
+  GESTOR_LICENCAS
+  GESTOR_ESTOQUE
+  FISCAL
+  ANALISTA
+  REVENDEDOR
+  GROSSISTA
+}
+
+model Utilizador {
+  id            String           @id @default(uuid())
+  nome          String
+  email         String           @unique
+  senha         String
+  perfil        PerfilUtilizador
+  ativo         Boolean          @default(true)
+
+  // Relação opcional: utilizador pode estar ligado a um Revendedor/Grossista
+  revendedorId  String?          @unique
+  revendedor    Revendedor?      @relation(fields: [revendedorId], references: [id])
+
+  relatoriosGerados Relatorio[]
+  fiscalizacoes     Fiscalizacao[]
+
+  criadoEm      DateTime         @default(now())
+  atualizadoEm  DateTime         @updatedAt
+
+  codigosRecuperacao CodigoRecuperacaoSenha[]
+
+  @@map("utilizadores")
+}
+
+model CodigoRecuperacaoSenha {
+  id           String     @id @default(uuid())
+  utilizadorId String
+  utilizador   Utilizador @relation(fields: [utilizadorId], references: [id])
+
+  codigoHash   String     // hash do código (bcrypt), nunca em texto puro
+  expiraEm     DateTime
+  usado        Boolean    @default(false)
+  tentativas   Int        @default(0)
+
+  criadoEm     DateTime   @default(now())
+
+  @@map("codigos_recuperacao_senha")
+}
+
+// ============================================================
+// 2. ZONA GEOGRÁFICA (usado por agentes, PDVs e relatórios)
+// ============================================================
+
+model ZonaGeografica {
+  id           String   @id @default(uuid())
+  nome         String
+  provincia    String
+  municipio    String?
+
+  agentes      Agente[]
+  pontosVenda  PontoVenda[]
+
+  criadoEm     DateTime @default(now())
+  atualizadoEm DateTime @updatedAt
+
+  @@map("zonas_geograficas")
+}
+
+// ============================================================
+// 3. GESTÃO DE LICENÇAS
+// ============================================================
+
+enum StatusLicenca {
+  ATIVA
+  PENDENTE_RENOVACAO
+  EXPIRADA
+  SUSPENSA
+  CANCELADA
+}
+
+model Agente {
+  id              String   @id @default(uuid())
+  nome            String
+  nif             String   @unique
+  contacto        String?
+  endereco        String?
+
+  zonaId          String?
+  zona            ZonaGeografica? @relation(fields: [zonaId], references: [id])
+
+  // Integração com SAP
+  codigoSap       String?  @unique
+
+  licencas        Licenca[]
+  distribuicoes   Distribuicao[]
+  fiscalizacoes   Fiscalizacao[]
+
+  ativo           Boolean  @default(true)
+  criadoEm        DateTime @default(now())
+  atualizadoEm    DateTime @updatedAt
+
+  @@map("agentes")
+}
+
+model Licenca {
+  id                String        @id @default(uuid())
+  numero            String        @unique
+  agenteId          String
+  agente            Agente        @relation(fields: [agenteId], references: [id])
+
+  dataEmissao       DateTime
+  dataValidade      DateTime
+  status            StatusLicenca @default(ATIVA)
+
+  // Localização exata para fiscalização
+  latitude          Float?
+  longitude          Float?
+
+  // Histórico de renovação
+  renovacoes        RenovacaoLicenca[]
+  fiscalizacoes      Fiscalizacao[]
+
+  // Referência ao registo espelhado no SAP
+  sapReferencia     String?
+
+  criadoEm          DateTime      @default(now())
+  atualizadoEm      DateTime      @updatedAt
+
+  @@map("licencas")
+}
+
+model RenovacaoLicenca {
+  id            String   @id @default(uuid())
+  licencaId     String
+  licenca       Licenca  @relation(fields: [licencaId], references: [id])
+
+  dataSolicitacao DateTime @default(now())
+  dataAprovacao   DateTime?
+  novaValidade    DateTime?
+  observacoes     String?  @db.Text
+  aprovado        Boolean? 
+
+  @@map("renovacoes_licenca")
+}
+
+model Fiscalizacao {
+  id            String   @id @default(uuid())
+  licencaId     String
+  licenca       Licenca  @relation(fields: [licencaId], references: [id])
+
+  agenteId      String
+  agente        Agente   @relation(fields: [agenteId], references: [id])
+
+  fiscalId      String
+  fiscal        Utilizador @relation(fields: [fiscalId], references: [id])
+
+  dataFiscalizacao DateTime @default(now())
+  conforme        Boolean
+  observacoes     String?  @db.Text
+  latitude        Float?
+  longitude       Float?
+
+  @@map("fiscalizacoes")
+}
+
+// ============================================================
+// 4. GESTÃO DE ESTOQUE (Gás Butano)
+// ============================================================
+
+enum TipoMovimentoEstoque {
+  ENTRADA
+  SAIDA
+  AJUSTE
+  TRANSFERENCIA
+}
+
+model Produto {
+  id            String   @id @default(uuid())
+  nome          String   // ex: "Botija de Gás Butano 12.5kg"
+  codigo        String   @unique
+  unidade       String   @default("UNIDADE")
+  pesoKg        Float?
+
+  lotes         LoteEstoque[]
+  movimentos    MovimentoEstoque[]
+  distribuicoes ItemDistribuicao[]
+  pedidos       ItemPedido[]
+
+  criadoEm      DateTime @default(now())
+  atualizadoEm  DateTime @updatedAt
+
+  @@map("produtos")
+}
+
+model Armazem {
+  id            String   @id @default(uuid())
+  nome          String
+  localizacao   String?
+  zonaId        String?
+
+  lotes         LoteEstoque[]
+  movimentos    MovimentoEstoque[]
+
+  criadoEm      DateTime @default(now())
+  atualizadoEm  DateTime @updatedAt
+
+  @@map("armazens")
+}
+
+model LoteEstoque {
+  id            String   @id @default(uuid())
+  produtoId     String
+  produto       Produto  @relation(fields: [produtoId], references: [id])
+
+  armazemId     String
+  armazem       Armazem  @relation(fields: [armazemId], references: [id])
+
+  codigoLote    String   @unique  // rastreabilidade
+  quantidade    Int
+  dataEntrada   DateTime @default(now())
+  dataValidade  DateTime?
+
+  movimentos    MovimentoEstoque[]
+
+  criadoEm      DateTime @default(now())
+  atualizadoEm  DateTime @updatedAt
+
+  @@map("lotes_estoque")
+}
+
+model MovimentoEstoque {
+  id            String               @id @default(uuid())
+  produtoId     String
+  produto       Produto              @relation(fields: [produtoId], references: [id])
+
+  armazemId     String
+  armazem       Armazem              @relation(fields: [armazemId], references: [id])
+
+  loteId        String?
+  lote          LoteEstoque?         @relation(fields: [loteId], references: [id])
+
+  tipo          TipoMovimentoEstoque
+  quantidade    Int
+  referenciaDoc String?              // ex: número de fatura/guia de remessa
+
+  // Quando o movimento está ligado a uma distribuição
+  distribuicaoId String?
+  distribuicao    Distribuicao?      @relation(fields: [distribuicaoId], references: [id])
+
+  criadoEm      DateTime             @default(now())
+
+  @@map("movimentos_estoque")
+}
+
+// ============================================================
+// 5. DISTRIBUIÇÃO DE AGENTES
+// ============================================================
+
+enum StatusDistribuicao {
+  PLANEADA
+  EM_TRANSITO
+  ENTREGUE
+  CANCELADA
+}
+
+model Distribuicao {
+  id            String             @id @default(uuid())
+  agenteId      String
+  agente        Agente             @relation(fields: [agenteId], references: [id])
+
+  pontoVendaId  String?
+  pontoVenda    PontoVenda?        @relation(fields: [pontoVendaId], references: [id])
+
+  status        StatusDistribuicao @default(PLANEADA)
+  dataPrevista  DateTime?
+  dataEntrega   DateTime?
+
+  itens         ItemDistribuicao[]
+  movimentos    MovimentoEstoque[]
+
+  observacoes   String?            @db.Text
+
+  criadoEm      DateTime           @default(now())
+  atualizadoEm  DateTime           @updatedAt
+
+  @@map("distribuicoes")
+}
+
+model ItemDistribuicao {
+  id              String       @id @default(uuid())
+  distribuicaoId  String
+  distribuicao    Distribuicao @relation(fields: [distribuicaoId], references: [id])
+
+  produtoId       String
+  produto         Produto      @relation(fields: [produtoId], references: [id])
+
+  quantidade      Int
+
+  @@map("itens_distribuicao")
+}
+
+// ============================================================
+// 6. INTERFACE PARA REVENDEDORES / GROSSISTAS (PDV / Pingpoints)
+// ============================================================
+
+enum TipoRevendedor {
+  REVENDEDOR
+  GROSSISTA
+}
+
+enum StatusPontoVenda {
+  ATIVO
+  PENDENTE_CADASTRO
+  INATIVO
+}
+
+model Revendedor {
+  id            String         @id @default(uuid())
+  nome          String
+  nif           String         @unique
+  tipo          TipoRevendedor
+  contacto      String?
+  email         String?        @unique
+
+  utilizador    Utilizador?
+
+  pontosVenda   PontoVenda[]
+  pedidos       Pedido[]
+
+  ativo         Boolean        @default(true)
+  criadoEm      DateTime       @default(now())
+  atualizadoEm  DateTime       @updatedAt
+
+  @@map("revendedores")
+}
+
+// "Pingpoints" - pontos de venda autorizados (cadastramento e recolha)
+model PontoVenda {
+  id            String           @id @default(uuid())
+  nome          String
+  codigo        String           @unique // código do pingpoint
+
+  revendedorId  String
+  revendedor    Revendedor       @relation(fields: [revendedorId], references: [id])
+
+  zonaId        String?
+  zona          ZonaGeografica?  @relation(fields: [zonaId], references: [id])
+
+  endereco      String?
+  latitude      Float?
+  longitude     Float?
+
+  status        StatusPontoVenda @default(PENDENTE_CADASTRO)
+  dataCadastro  DateTime         @default(now())
+
+  distribuicoes Distribuicao[]
+
+  criadoEm      DateTime         @default(now())
+  atualizadoEm  DateTime         @updatedAt
+
+  @@map("pontos_venda")
+}
+
+enum StatusPedido {
+  PENDENTE
+  APROVADO
+  EM_PROCESSAMENTO
+  CONCLUIDO
+  REJEITADO
+}
+
+// Pedidos feitos pelos revendedores/grossistas através da plataforma dedicada
+model Pedido {
+  id            String       @id @default(uuid())
+  revendedorId  String
+  revendedor    Revendedor   @relation(fields: [revendedorId], references: [id])
+
+  status        StatusPedido @default(PENDENTE)
+  itens         ItemPedido[]
+
+  observacoes   String?      @db.Text
+
+  criadoEm      DateTime     @default(now())
+  atualizadoEm  DateTime     @updatedAt
+
+  @@map("pedidos")
+}
+
+model ItemPedido {
+  id         String  @id @default(uuid())
+  pedidoId   String
+  pedido     Pedido  @relation(fields: [pedidoId], references: [id])
+
+  produtoId  String
+  produto    Produto @relation(fields: [produtoId], references: [id])
+
+  quantidade Int
+
+  @@map("itens_pedido")
+}
+
+// ============================================================
+// 7. RELATÓRIOS E ANÁLISE DE DADOS
+// ============================================================
+
+enum TipoRelatorio {
+  DISTRIBUICAO
+  VENDAS
+  ESTOQUE
+  LICENCAS
+  FISCALIZACAO
+  DESEMPENHO_AGENTE
+}
+
+model Relatorio {
+  id            String        @id @default(uuid())
+  titulo        String
+  tipo          TipoRelatorio
+
+  zonaId        String?       // permite filtrar relatório por zona geográfica
+  periodoInicio DateTime?
+  periodoFim    DateTime?
+
+  geradoPorId   String
+  geradoPor     Utilizador    @relation(fields: [geradoPorId], references: [id])
+
+  // Dados/resultado do relatório guardados em JSON para flexibilidade de análise
+  dadosJson     Json?
+
+  criadoEm      DateTime      @default(now())
+
+  @@map("relatorios")
+}
